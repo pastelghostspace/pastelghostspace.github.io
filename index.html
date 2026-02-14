@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>PastelGhost.space - v0.7</title>
+    <style>
+        :root {
+            --bg-space: #1a1525;
+            --primary-pink: #ffb7b2;
+            --ghost-blue: #a8e6cf;
+            --gold: #ffd700;
+            --ui-font: 'Courier New', monospace;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0; overflow: hidden;
+            background-color: var(--bg-space);
+            background-image: 
+                radial-gradient(2px 2px at 20px 30px, #eee, rgba(0,0,0,0)),
+                radial-gradient(2px 2px at 50px 160px, #ddd, rgba(0,0,0,0));
+            background-repeat: repeat;
+            background-size: 200px 200px;
+            font-family: var(--ui-font);
+            color: var(--primary-pink);
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none; 
+        }
+
+        #game-area { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
+
+        /* UI RESPONSIVA */
+        #ui-layer {
+            position: absolute; top: 15px; left: 15px; z-index: 10;
+            width: 50%; max-width: 280px; pointer-events: none;
+        }
+        .stat-label { font-size: clamp(0.9rem, 4vw, 1.2rem); font-weight: bold; text-shadow: 2px 2px #000; display: block; }
+        #hp-container { width: 100%; height: 12px; background: rgba(0,0,0,0.5); border: 2px solid var(--primary-pink); border-radius: 10px; overflow: hidden; margin: 5px 0; }
+        #hp-bar { width: 100%; height: 100%; background: var(--ghost-blue); transition: width 0.3s; }
+
+        /* ENTIDADES */
+        #player {
+            position: absolute; bottom: 120px; left: 50%;
+            font-size: 50px; transform: translateX(-50%);
+            z-index: 5; filter: drop-shadow(0 0 5px var(--primary-pink));
+        }
+        .shield-active { filter: drop-shadow(0 0 20px var(--gold)) brightness(1.2) !important; }
+
+        #boss {
+            position: absolute; top: 80px; left: 50%;
+            font-size: 80px; transform: translateX(-50%);
+            z-index: 5; transition: filter 0.2s;
+        }
+
+        .cake-bullet { position: absolute; font-size: 25px; z-index: 4; transform: translateX(-50%); }
+        .ecto-bullet { position: absolute; width: 15px; height: 15px; border-radius: 50%; z-index: 4; box-shadow: 0 0 10px white; }
+        .powerup-item { position: absolute; font-size: 35px; z-index: 6; transform: translateX(-50%); }
+
+        /* OVERLAYS */
+        .overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(26, 21, 37, 0.95);
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 100;
+            text-align: center; padding: 20px;
+        }
+        button {
+            background: var(--primary-pink); border: none; padding: 15px 40px;
+            font-family: var(--ui-font); font-weight: bold; font-size: 1.5rem;
+            cursor: pointer; border-radius: 50px; margin-top: 20px;
+            box-shadow: 0 4px 0 #d49a96; color: #1a1525;
+        }
+        button:active { transform: translateY(4px); box-shadow: none; }
+    </style>
+</head>
+<body>
+
+    <div id="start-screen" class="overlay">
+        <h1 style="font-size: 3rem; margin:0;">PASTEL GHOST</h1>
+        <p style="color: var(--ghost-blue)">DESLIZA PARA MOVER Y DISPARAR</p>
+        <button onclick="startGame()">COMENZAR</button>
+    </div>
+
+    <div id="game-over-screen" class="overlay" style="display: none;">
+        <h1 style="font-size: 3.5rem; color: #ff6f69;">GAME OVER</h1>
+        <p>Nivel: <span id="final-level">1</span> | Score: <span id="final-score">0</span></p>
+        <button onclick="resetGame()">REINTENTAR</button>
+    </div>
+
+    <div id="ui-layer">
+        <span class="stat-label">LVL: <span id="lvl-ui">1</span></span>
+        <span class="stat-label">PUNTOS: <span id="score-ui">0</span></span>
+        <div id="hp-container"><div id="hp-bar"></div></div>
+        <div id="lives-ui" style="font-size: 1.5rem;">❤️❤️❤️</div>
+    </div>
+
+    <div id="game-area">
+        <div id="boss">👻</div>
+        <div id="player">🚀</div>
+    </div>
+
+    <script>
+        const GHOSTS = [
+            { icon: '👻', color: '#a8e6cf' }, { icon: '👾', color: '#bdb2ff' },
+            { icon: '💀', color: '#ffc6ff' }, { icon: '🤡', color: '#fffffc' },
+            { icon: '👿', color: '#ffadad' }
+        ];
+
+        let state = {
+            running: false,
+            level: 1,
+            score: 0,
+            lives: 3,
+            playerX: window.innerWidth / 2,
+            bossHP: 100,
+            maxBossHP: 100,
+            bossDir: 1,
+            keys: {},
+            hasShield: false,
+            weaponLevel: 1,
+            lastFired: 0,
+            isTouching: false,
+            bossTimer: null,
+            powerupTimer: null
+        };
+
+        const player = document.getElementById('player');
+        const boss = document.getElementById('boss');
+        const gameArea = document.getElementById('game-area');
+
+        function startGame() {
+            document.getElementById('start-screen').style.display = 'none';
+            state.running = true;
+            setupLevel();
+            gameLoop();
+            spawnBossAttack();
+            spawnPowerUps();
+        }
+
+        // --- FUNCIÓN DE REINTENTO TOTAL ---
+        function resetGame() {
+            // 1. Detener ciclos actuales
+            state.running = false;
+            clearTimeout(state.bossTimer);
+            clearTimeout(state.powerupTimer);
+
+            // 2. Limpiar elementos visuales
+            document.querySelectorAll('.cake-bullet, .ecto-bullet, .powerup-item').forEach(el => el.remove());
+
+            // 3. Resetear Estado
+            state = {
+                running: true,
+                level: 1,
+                score: 0,
+                lives: 3,
+                playerX: window.innerWidth / 2,
+                bossHP: 100,
+                maxBossHP: 100,
+                bossDir: 1,
+                keys: {},
+                hasShield: false,
+                weaponLevel: 1,
+                lastFired: 0,
+                isTouching: false
+            };
+
+            // 4. Resetear UI y Player
+            document.getElementById('game-over-screen').style.display = 'none';
+            player.classList.remove('shield-active');
+            updateUI();
+            setupLevel();
+
+            // 5. Reiniciar loops
+            gameLoop();
+            spawnBossAttack();
+            spawnPowerUps();
+        }
+
+        function setupLevel() {
+            const data = GHOSTS[(state.level - 1) % GHOSTS.length];
+            boss.innerText = data.icon;
+            boss.style.filter = `drop-shadow(0 0 20px ${data.color})`;
+            state.maxBossHP = 100 + (state.level * 30);
+            state.bossHP = state.maxBossHP;
+            updateUI();
+        }
+
+        function gameLoop() {
+            if (!state.running) return;
+
+            // Movimiento teclado (PC)
+            if (state.keys['ArrowLeft'] && state.playerX > 40) state.playerX -= 8;
+            if (state.keys['ArrowRight'] && state.playerX < window.innerWidth - 40) state.playerX += 8;
+            player.style.left = state.playerX + 'px';
+
+            // Auto-disparo (Al tocar o espacio)
+            if (state.keys['Space'] || state.isTouching) {
+                const now = Date.now();
+                if (now - state.lastFired > 250) {
+                    disparar(0, '🧁');
+                    if(state.weaponLevel > 1) { disparar(-0.3, '🍬'); disparar(0.3, '🍬'); }
+                    state.lastFired = now;
+                }
+            }
+
+            // Movimiento Boss
+            const speed = 2 + (state.level * 0.5);
+            let bLeft = boss.offsetLeft;
+            if (bLeft > window.innerWidth - 60) state.bossDir = -1;
+            if (bLeft < 60) state.bossDir = 1;
+            boss.style.left = (bLeft + (speed * state.bossDir)) + 'px';
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- CONTROLES MÓVILES ---
+        document.addEventListener('touchstart', (e) => { 
+            if(state.running) { state.isTouching = true; moverNave(e.touches[0].clientX); }
+        });
+        document.addEventListener('touchmove', (e) => { 
+            if(state.running) { e.preventDefault(); moverNave(e.touches[0].clientX); }
+        }, {passive: false});
+        document.addEventListener('touchend', () => state.isTouching = false);
+        document.addEventListener('keydown', e => state.keys[e.code] = true);
+        document.addEventListener('keyup', e => state.keys[e.code] = false);
+
+        function moverNave(x) {
+            state.playerX = Math.max(40, Math.min(window.innerWidth - 40, x));
+        }
+
+        function disparar(ang, icon) {
+            const b = document.createElement('div');
+            b.className = 'cake-bullet'; b.innerText = icon;
+            b.style.left = state.playerX + 'px';
+            b.style.bottom = '140px';
+            gameArea.appendChild(b);
+
+            let move = setInterval(() => {
+                if(!state.running) { b.remove(); clearInterval(move); return; }
+                let bot = parseFloat(b.style.bottom) + 12;
+                let lef = parseFloat(b.style.left) + (ang * 8);
+                b.style.bottom = bot + 'px'; b.style.left = lef + 'px';
+
+                if (colision(b, boss)) {
+                    state.bossHP -= 10; state.score += 10; updateUI();
+                    b.remove(); clearInterval(move);
+                    if (state.bossHP <= 0) { state.level++; state.score += 500; setupLevel(); }
+                }
+                if (bot > window.innerHeight) { b.remove(); clearInterval(move); }
+            }, 20);
+        }
+
+        function spawnBossAttack() {
+            if(!state.running) return;
+            const e = document.createElement('div');
+            e.className = 'ecto-bullet';
+            e.style.background = GHOSTS[(state.level - 1) % GHOSTS.length].color;
+            e.style.left = boss.offsetLeft + 'px'; e.style.top = boss.offsetTop + 50 + 'px';
+            gameArea.appendChild(e);
+
+            let move = setInterval(() => {
+                if(!state.running) { e.remove(); clearInterval(move); return; }
+                let t = parseFloat(e.style.top) + (4 + state.level);
+                e.style.top = t + 'px';
+                if (colision(e, player)) {
+                    if(state.hasShield) { state.hasShield = false; player.classList.remove('shield-active'); }
+                    else { state.lives--; updateUI(); if(state.lives <= 0) gameOver(); }
+                    e.remove(); clearInterval(move);
+                }
+                if (t > window.innerHeight) { e.remove(); clearInterval(move); }
+            }, 20);
+            state.bossTimer = setTimeout(spawnBossAttack, Math.max(400, 2000 - (state.level * 100)));
+        }
+
+        function spawnPowerUps() {
+            if(!state.running) return;
+            state.powerupTimer = setTimeout(() => {
+                if(!state.running) return;
+                const p = document.createElement('div');
+                const isShield = Math.random() > 0.5;
+                p.className = 'powerup-item'; p.innerText = isShield ? '🍩' : '🍬';
+                p.style.left = (Math.random() * (window.innerWidth - 60) + 30) + 'px';
+                p.style.top = '-50px';
+                gameArea.appendChild(p);
+
+                let move = setInterval(() => {
+                    let t = parseFloat(p.style.top) + 4;
+                    p.style.top = t + 'px';
+                    if(colision(p, player)) {
+                        if(isShield) { state.hasShield = true; player.classList.add('shield-active'); }
+                        else { state.weaponLevel = 2; setTimeout(() => state.weaponLevel = 1, 7000); }
+                        p.remove(); clearInterval(move);
+                    }
+                    if(t > window.innerHeight) { p.remove(); clearInterval(move); }
+                }, 20);
+                spawnPowerUps();
+            }, 8000 + Math.random() * 5000);
+        }
+
+        function updateUI() {
+            document.getElementById('score-ui').innerText = state.score;
+            document.getElementById('lvl-ui').innerText = state.level;
+            document.getElementById('lives-ui').innerText = '❤️'.repeat(Math.max(0, state.lives));
+            document.getElementById('hp-bar').style.width = (state.bossHP / state.maxBossHP * 100) + '%';
+        }
+
+        function colision(a, b) {
+            const r1 = a.getBoundingClientRect();
+            const r2 = b.getBoundingClientRect();
+            return !(r1.right < r2.left+10 || r1.left > r2.right-10 || r1.bottom < r2.top+10 || r1.top > r2.bottom-10);
+        }
+
+        function gameOver() {
+            state.running = false;
+            document.getElementById('game-over-screen').style.display = 'flex';
+            document.getElementById('final-level').innerText = state.level;
+            document.getElementById('final-score').innerText = state.score;
+        }
+    </script>
+</body>
+</html>
